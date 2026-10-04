@@ -18,7 +18,6 @@ from soulxpodcast.utils.segmented_workflow import (
     split_script_into_sentence_units,
     table_to_units,
     unit_to_dict,
-    units_to_table,
 )
 
 
@@ -91,6 +90,36 @@ def _units_dict_to_table(units: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]
     ]
 
 
+def _sentence_dicts_to_rows(units: Sequence[Dict[str, Any]]) -> List[List[Any]]:
+    return [
+        [
+            int(item["sentence_id"]),
+            int(item["chunk_id"]),
+            str(item["speaker"]),
+            str(item["text"]),
+            round(float(item.get("estimate_seconds", 0.0)), 2),
+        ]
+        for item in units
+    ]
+
+
+def _review_dicts_to_rows(segments: Sequence[Dict[str, Any]]) -> List[List[Any]]:
+    return [
+        [
+            int(item["sentence_id"]),
+            int(item.get("chunk_id", -1)),
+            str(item["speaker"]),
+            str(item["text"]),
+            int(item.get("start_sample", 0)),
+            int(item.get("end_sample", 0)),
+            round(float(item.get("start_seconds", 0.0)), 6),
+            round(float(item.get("end_seconds", 0.0)), 6),
+            round(float(item.get("duration_seconds", 0.0)), 6),
+        ]
+        for item in segments
+    ]
+
+
 def _save_outputs(work_dir: Path, audio: np.ndarray, manifest: Dict[str, Any]) -> Tuple[str, str]:
     work_dir.mkdir(parents=True, exist_ok=True)
     audio_path = work_dir / "final_audio.wav"
@@ -120,7 +149,7 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
             }
             sentence_choices = [str(item["sentence_id"]) for item in units_dict]
             return (
-                units_to_table(units),
+                _sentence_dicts_to_rows(units_dict),
                 gr.update(choices=sentence_choices, value=sentence_choices[0] if sentence_choices else None),
                 f"Prepared {len(units_dict)} sentence(s) in {len(_chunk_map_from_units(units_dict))} chunk(s).",
                 new_state,
@@ -160,7 +189,7 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
             }
             sentence_choices = [str(item["sentence_id"]) for item in units_dict]
             return (
-                units_to_table(units),
+                _sentence_dicts_to_rows(units_dict),
                 gr.update(choices=sentence_choices, value=sentence_choices[0] if sentence_choices else None),
                 "Edits applied.",
                 new_state,
@@ -276,7 +305,7 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
                 "max_chunk_seconds": float(state.get("max_chunk_seconds", 110.0)),
             }
             full_audio, review_rows, audio_path, manifest_path, _ = _reassemble_from_state(new_state)
-            return full_audio, review_rows, audio_path, manifest_path, "Generation complete.", new_state
+            return full_audio, _review_dicts_to_rows(review_rows), audio_path, manifest_path, "Generation complete.", new_state
         except Exception as exc:
             return None, [], None, None, f"Generation failed: {exc}", state
 
@@ -348,8 +377,8 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
             }
             full_audio, review_rows, audio_path, manifest_path, _ = _reassemble_from_state(new_state)
 
-            updated_table = _units_dict_to_table(updated_units)
-            return updated_table, full_audio, review_rows, audio_path, manifest_path, "Selected sentence regenerated.", new_state
+            updated_table = _sentence_dicts_to_rows(updated_units)
+            return updated_table, full_audio, _review_dicts_to_rows(review_rows), audio_path, manifest_path, "Selected sentence regenerated.", new_state
         except Exception as exc:
             return table_value, None, [], None, None, f"Selective regeneration failed: {exc}", state
 
