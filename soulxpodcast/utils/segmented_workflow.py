@@ -167,6 +167,152 @@ def units_to_table(units: Sequence[ScriptSentence]) -> List[Dict[str, Any]]:
     ]
 
 
+TABLE_HEADERS = ["sentence_id", "chunk_id", "speaker", "text", "estimate_seconds"]
+
+
+def _normalize_header(value: Any) -> str:
+    return str(value).strip().lower()
+
+
+def _is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if value.__class__.__name__ == "NAType":
+        return True
+    try:
+        return bool(np.isnan(value))
+    except Exception:
+        pass
+    try:
+        unequal = value != value
+    except Exception:
+        return False
+    return bool(unequal) if isinstance(unequal, (bool, np.bool_)) else False
+
+
+def _is_blank_value(value: Any) -> bool:
+    if _is_missing_value(value):
+        return True
+    return isinstance(value, str) and not value.strip()
+
+
+def _row_from_values(values: Sequence[Any], headers: Sequence[Any] | None = None) -> Dict[str, Any]:
+    row: Dict[str, Any] = {}
+    if headers:
+        for i, header in enumerate(headers):
+            key = _normalize_header(header)
+            if key not in TABLE_HEADERS:
+                continue
+            if i >= len(values):
+                continue
+            value = values[i]
+            if _is_missing_value(value):
+                continue
+            row[key] = value
+        return row
+
+    for i, key in enumerate(TABLE_HEADERS):
+        if i >= len(values):
+            continue
+        value = values[i]
+        if _is_missing_value(value):
+            continue
+        row[key] = value
+    return row
+
+
+def normalize_sentence_table_rows(table_value: Any) -> List[Dict[str, Any]]:
+    if table_value is None:
+        return []
+
+    headers: Sequence[Any] | None = None
+    rows_data: Any = None
+
+    if hasattr(table_value, "headers") and hasattr(table_value, "data"):
+        headers = getattr(table_value, "headers")
+        rows_data = getattr(table_value, "data")
+    elif isinstance(table_value, dict):
+        if isinstance(table_value.get("data"), list):
+            headers = table_value.get("headers")
+            rows_data = table_value.get("data")
+        elif table_value and all(isinstance(v, (list, tuple)) for v in table_value.values()):
+            headers = list(table_value.keys())
+            values = list(table_value.values())
+            row_count = max(len(col) for col in values)
+            rows_data = [
+                [values[col_idx][row_idx] if row_idx < len(values[col_idx]) else None for col_idx in range(len(values))]
+                for row_idx in range(row_count)
+            ]
+    elif hasattr(table_value, "to_dict"):
+        try:
+            records = table_value.to_dict("records")
+            if isinstance(records, list):
+                rows_data = records
+        except TypeError:
+            pass
+        if rows_data is None:
+            if hasattr(table_value, "columns") and hasattr(table_value, "values"):
+                headers = list(getattr(table_value, "columns"))
+                rows_data = getattr(table_value, "values")
+            else:
+                try:
+                    dict_value = table_value.to_dict()
+                except Exception:
+                    dict_value = None
+                if isinstance(dict_value, dict) and isinstance(dict_value.get("data"), list):
+                    headers = dict_value.get("headers")
+                    rows_data = dict_value.get("data")
+    elif isinstance(table_value, list):
+        rows_data = table_value
+
+    if rows_data is None:
+        return []
+
+    if not isinstance(rows_data, list) and hasattr(rows_data, "tolist"):
+        rows_data = rows_data.tolist()
+    if isinstance(rows_data, tuple):
+        rows_data = list(rows_data)
+
+    rows: List[Dict[str, Any]] = []
+    if isinstance(rows_data, list) and rows_data:
+        first_row = rows_data[0]
+        if isinstance(first_row, dict):
+            for item in rows_data:
+                row = {}
+                for source_key, value in item.items():
+                    key = _normalize_header(source_key)
+                    if key not in TABLE_HEADERS:
+                        continue
+                    if _is_missing_value(value):
+                        continue
+                    row[key] = value
+                rows.append(row)
+        else:
+            if headers is None and isinstance(first_row, (list, tuple)):
+                first_headers = [_normalize_header(v) for v in first_row]
+                if first_headers[: len(TABLE_HEADERS)] == TABLE_HEADERS:
+                    headers = first_row
+                    rows_data = rows_data[1:]
+            for item in rows_data:
+                if not isinstance(item, (list, tuple)):
+                    continue
+                rows.append(_row_from_values(item, headers=headers))
+
+    while rows and all(_is_blank_value(rows[-1].get(key)) for key in TABLE_HEADERS):
+        rows.pop()
+
+    for i, row in enumerate(rows):
+        text = row.get("text")
+        has_other = any(not _is_blank_value(row.get(key)) for key in TABLE_HEADERS if key != "text")
+        if _is_blank_value(text) and has_other:
+            raise ValueError(
+                f"Partially populated row {i}: missing text. "
+                "Clear the row or provide sentence text."
+            )
+
+    return rows
+
+
 def table_to_units(rows: Sequence[Dict[str, Any]]) -> List[ScriptSentence]:
     units: List[ScriptSentence] = []
     for i, row in enumerate(rows):
