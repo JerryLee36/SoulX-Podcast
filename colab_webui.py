@@ -13,6 +13,7 @@ import torch
 from soulxpodcast.utils.infer_utils import initiate_model, process_single_input
 from soulxpodcast.utils.segmented_workflow import (
     assemble_audio_and_manifest,
+    normalize_sentence_table_rows,
     replace_segment_audio,
     split_script_into_sentence_units,
     table_to_units,
@@ -22,23 +23,7 @@ from soulxpodcast.utils.segmented_workflow import (
 
 
 def _to_rows(table_value: Any) -> List[Dict[str, Any]]:
-    if table_value is None:
-        return []
-
-    if hasattr(table_value, "to_dict"):
-        return table_value.to_dict("records")
-
-    if isinstance(table_value, list) and table_value:
-        if isinstance(table_value[0], dict):
-            return table_value
-        headers = ["sentence_id", "chunk_id", "speaker", "text", "estimate_seconds"]
-        rows = []
-        for row in table_value:
-            item = {k: row[i] if i < len(row) else None for i, k in enumerate(headers)}
-            rows.append(item)
-        return rows
-
-    return []
+    return normalize_sentence_table_rows(table_value)
 
 
 def _segments_from_units(units: Sequence[Dict[str, Any]], previous_segments: Sequence[Dict[str, Any]] | None = None):
