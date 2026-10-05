@@ -11,6 +11,10 @@ COMMON_ABBREVIATIONS = {
     "e.g.", "i.e.", "u.s.", "u.k.", "a.m.", "p.m.", "no.", "st.",
 }
 
+# Silence inserted between consecutive sentence clips when they are joined into
+# one track. Without it, back-to-back clips sound clipped.
+DEFAULT_SEGMENT_GAP_MS = 150.0
+
 
 @dataclass
 class ScriptSentence:
@@ -351,18 +355,38 @@ def group_sentence_ids_by_chunk(units: Sequence[ScriptSentence]) -> List[List[in
 def assemble_audio_and_manifest(
     segments: Sequence[Dict[str, Any]],
     sample_rate: int = 24000,
+    gap_ms: float = DEFAULT_SEGMENT_GAP_MS,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Join per-sentence clips into one track, with a short pause between them.
+
+    ``gap_ms`` milliseconds of silence are inserted *between* consecutive clips
+    -- never before the first or after the last -- so the joins do not sound
+    clipped. The pause is part of the timeline, so ``start_seconds`` and
+    ``end_seconds`` stay accurate for review and selective regeneration.
+    """
+    if gap_ms is None:
+        gap_ms = 0.0
+    gap_ms = float(gap_ms)
+    if gap_ms < 0:
+        raise ValueError("gap_ms must be >= 0")
+    gap_samples = int(round(sample_rate * gap_ms / 1000.0))
+
     merged: List[np.ndarray] = []
     timeline: List[Dict[str, Any]] = []
     offset_samples = 0
 
-    for segment in sorted(segments, key=lambda item: item["sentence_id"]):
+    for index, segment in enumerate(
+            sorted(segments, key=lambda item: item["sentence_id"])):
         audio = segment.get("audio")
         if audio is None:
             raise ValueError(f"Missing audio for sentence_id={segment['sentence_id']}")
 
         np_audio = np.asarray(audio, dtype=np.float32).reshape(-1)
         duration_samples = int(np_audio.shape[0])
+
+        if index and gap_samples:
+            merged.append(np.zeros((gap_samples,), dtype=np.float32))
+            offset_samples += gap_samples
 
         timeline.append(
             {
