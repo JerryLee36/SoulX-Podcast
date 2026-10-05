@@ -18,7 +18,6 @@ from soulxpodcast.utils.segmented_workflow import (
     split_script_into_sentence_units,
     table_to_units,
     unit_to_dict,
-    units_to_table,
 )
 
 
@@ -91,6 +90,36 @@ def _units_dict_to_table(units: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]
     ]
 
 
+def _sentence_dicts_to_rows(units: Sequence[Dict[str, Any]]) -> List[List[Any]]:
+    return [
+        [
+            int(item["sentence_id"]),
+            int(item["chunk_id"]),
+            str(item["speaker"]),
+            str(item["text"]),
+            round(float(item.get("estimate_seconds", 0.0)), 2),
+        ]
+        for item in units
+    ]
+
+
+def _review_dicts_to_rows(segments: Sequence[Dict[str, Any]]) -> List[List[Any]]:
+    return [
+        [
+            int(item["sentence_id"]),
+            int(item.get("chunk_id", -1)),
+            str(item["speaker"]),
+            str(item["text"]),
+            int(item.get("start_sample", 0)),
+            int(item.get("end_sample", 0)),
+            round(float(item.get("start_seconds", 0.0)), 6),
+            round(float(item.get("end_seconds", 0.0)), 6),
+            round(float(item.get("duration_seconds", 0.0)), 6),
+        ]
+        for item in segments
+    ]
+
+
 def _save_outputs(work_dir: Path, audio: np.ndarray, manifest: Dict[str, Any]) -> Tuple[str, str]:
     work_dir.mkdir(parents=True, exist_ok=True)
     audio_path = work_dir / "final_audio.wav"
@@ -120,7 +149,7 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
             }
             sentence_choices = [str(item["sentence_id"]) for item in units_dict]
             return (
-                units_to_table(units),
+                _sentence_dicts_to_rows(units_dict),
                 gr.update(choices=sentence_choices, value=sentence_choices[0] if sentence_choices else None),
                 f"Prepared {len(units_dict)} sentence(s) in {len(_chunk_map_from_units(units_dict))} chunk(s).",
                 new_state,
@@ -160,7 +189,7 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
             }
             sentence_choices = [str(item["sentence_id"]) for item in units_dict]
             return (
-                units_to_table(units),
+                _sentence_dicts_to_rows(units_dict),
                 gr.update(choices=sentence_choices, value=sentence_choices[0] if sentence_choices else None),
                 "Edits applied.",
                 new_state,
@@ -276,7 +305,7 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
                 "max_chunk_seconds": float(state.get("max_chunk_seconds", 110.0)),
             }
             full_audio, review_rows, audio_path, manifest_path, _ = _reassemble_from_state(new_state)
-            return full_audio, review_rows, audio_path, manifest_path, "Generation complete.", new_state
+            return full_audio, _review_dicts_to_rows(review_rows), audio_path, manifest_path, "Generation complete.", new_state
         except Exception as exc:
             return None, [], None, None, f"Generation failed: {exc}", state
 
@@ -327,19 +356,39 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
             _validate_prompt_inputs(updated_units, spk1_prompt_audio, spk1_prompt_text, spk2_prompt_audio, spk2_prompt_text)
             segments = _segments_from_units(updated_units, previous_segments=state.get("segments", []))
 
-            target_unit = [item for item in updated_units if int(item["sentence_id"]) == sid][0]
-            generated = _generate_sentence_batch(
-                [target_unit],
-                spk1_prompt_audio,
-                spk1_prompt_text,
-                spk1_dialect_prompt,
-                spk2_prompt_audio,
-                spk2_prompt_text,
-                spk2_dialect_prompt,
-                int(seed_value),
-            )
-            _, new_audio = generated[0]
-            segments = replace_segment_audio(segments, sid, new_audio)
+            # Always re-record the selected sentence, even when its text and
+            # speaker are unchanged.
+            for idx, segment in enumerate(segments):
+                if int(segment["sentence_id"]) == sid:
+                    segments[idx] = dict(segment)
+                    segments[idx]["audio"] = None
+                    break
+
+            # Generate the selected sentence plus anything still missing audio,
+            # so this button also works before "Generate all chunks".
+            by_sentence_id = {int(item["sentence_id"]): item for item in updated_units}
+            missing = {int(segment["sentence_id"]) for segment in segments
+                       if segment.get("audio") is None}
+            for sentence_ids in _chunk_map_from_units(updated_units):
+                todo = [sentence_id for sentence_id in sentence_ids if sentence_id in missing]
+                if not todo:
+                    continue
+                generated = _generate_sentence_batch(
+                    [by_sentence_id[sentence_id] for sentence_id in todo],
+                    spk1_prompt_audio,
+                    spk1_prompt_text,
+                    spk1_dialect_prompt,
+                    spk2_prompt_audio,
+                    spk2_prompt_text,
+                    spk2_dialect_prompt,
+                    int(seed_value),
+                )
+                for sentence_id, wav in generated:
+                    for idx, segment in enumerate(segments):
+                        if int(segment["sentence_id"]) == int(sentence_id):
+                            segments[idx] = dict(segment)
+                            segments[idx]["audio"] = wav
+                            break
 
             new_state = {
                 "units": updated_units,
@@ -348,8 +397,8 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
             }
             full_audio, review_rows, audio_path, manifest_path, _ = _reassemble_from_state(new_state)
 
-            updated_table = _units_dict_to_table(updated_units)
-            return updated_table, full_audio, review_rows, audio_path, manifest_path, "Selected sentence regenerated.", new_state
+            updated_table = _sentence_dicts_to_rows(updated_units)
+            return updated_table, full_audio, _review_dicts_to_rows(review_rows), audio_path, manifest_path, "Selected sentence regenerated.", new_state
         except Exception as exc:
             return table_value, None, [], None, None, f"Selective regeneration failed: {exc}", state
 
@@ -383,7 +432,7 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
             headers=["sentence_id", "chunk_id", "speaker", "text", "estimate_seconds"],
             datatype=["number", "number", "str", "str", "number"],
             row_count=(0, "dynamic"),
-            col_count=(5, "fixed"),
+            column_count=(5, "fixed"),
             interactive=True,
             label="Sentence/chunk list (editable)",
         )
@@ -395,6 +444,8 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
                 "sentence_id", "chunk_id", "speaker", "text", "start_sample", "end_sample",
                 "start_seconds", "end_seconds", "duration_seconds",
             ],
+            datatype=["number", "number", "str", "str", "number", "number",
+                      "number", "number", "number"],
             interactive=False,
             label="Review timeline",
         )
@@ -466,9 +517,58 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
     return app
 
 
+MODEL_DIRNAME = "SoulX-Podcast-1.7B"
+REQUIRED_MODEL_FILES = ("soulxpodcast_config.json", "flow.pt", "hift.pt")
+
+
+def _model_dir_candidates(explicit):
+    here = Path(__file__).resolve().parent
+    if explicit:
+        yield Path(explicit).expanduser()
+    yield here / "pretrained_models" / MODEL_DIRNAME
+    # Tolerate a second checkout (e.g. SoulX-Podcast01) next to this one.
+    for sibling in sorted(here.parent.glob(
+            f"SoulX-Podcast*/pretrained_models/{MODEL_DIRNAME}")):
+        yield sibling
+
+
+def _resolve_model_path(explicit=None):
+    """Return a usable model directory, or raise a clear, actionable error."""
+    tried = []
+    for candidate in _model_dir_candidates(explicit):
+        candidate = candidate.resolve()
+        tried.append(str(candidate))
+        if not candidate.is_dir():
+            continue
+        missing = [name for name in REQUIRED_MODEL_FILES
+                   if not (candidate / name).exists()]
+        if missing:
+            raise FileNotFoundError(
+                f"Model directory {candidate} is incomplete (missing "
+                f"{', '.join(missing)}). Download it with:\n"
+                f"  hf download Soul-AILab/{MODEL_DIRNAME} "
+                f"--local-dir pretrained_models/{MODEL_DIRNAME}"
+            )
+        return str(candidate)
+
+    raise FileNotFoundError(
+        "Could not find the SoulX-Podcast model directory. Looked in:\n  "
+        + "\n  ".join(tried)
+        + "\nDownload it with:\n"
+        f"  hf download Soul-AILab/{MODEL_DIRNAME} "
+        f"--local-dir pretrained_models/{MODEL_DIRNAME}"
+    )
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="SoulX-Podcast Colab-compatible web GUI")
-    parser.add_argument("--model_path", required=True, type=str, help="Path to SoulX-Podcast model directory")
+    parser.add_argument(
+        "--model_path",
+        default=None,
+        type=str,
+        help="Path to the SoulX-Podcast model directory "
+             "(auto-detected under pretrained_models/ when omitted)",
+    )
     parser.add_argument("--llm_engine", default="hf", choices=["hf", "vllm"], help="Inference engine")
     parser.add_argument("--fp16_flow", action="store_true", help="Enable fp16 flow")
     parser.add_argument("--seed", type=int, default=1988, help="Seed for generation")
@@ -480,10 +580,9 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if not os.path.exists(args.model_path):
-        raise FileNotFoundError(f"Model path not found: {args.model_path}")
+    model_path = _resolve_model_path(args.model_path)
 
-    app = create_app(args.model_path, args.llm_engine, args.fp16_flow, args.seed)
+    app = create_app(model_path, args.llm_engine, args.fp16_flow, args.seed)
     app.queue().launch(share=args.share, server_name="0.0.0.0", server_port=args.port)
 
 
