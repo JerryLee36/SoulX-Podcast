@@ -12,6 +12,7 @@ import torch
 
 from soulxpodcast.utils.infer_utils import initiate_model, process_single_input
 from soulxpodcast.utils.segmented_workflow import (
+    DEFAULT_SEGMENT_GAP_MS,
     assemble_audio_and_manifest,
     normalize_sentence_table_rows,
     replace_segment_audio,
@@ -146,6 +147,7 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
                 "units": units_dict,
                 "segments": segments,
                 "max_chunk_seconds": max_chunk_seconds,
+                "gap_ms": float(state.get("gap_ms", DEFAULT_SEGMENT_GAP_MS) or 0.0),
             }
             sentence_choices = [str(item["sentence_id"]) for item in units_dict]
             return (
@@ -186,6 +188,7 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
                 "units": units_dict,
                 "segments": segments,
                 "max_chunk_seconds": max_chunk_seconds,
+                "gap_ms": float(state.get("gap_ms", DEFAULT_SEGMENT_GAP_MS) or 0.0),
             }
             sentence_choices = [str(item["sentence_id"]) for item in units_dict]
             return (
@@ -243,7 +246,10 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
         segments = current_state.get("segments", [])
         if not segments:
             raise ValueError("No segments in state")
-        final_audio, manifest = assemble_audio_and_manifest(segments)
+        final_audio, manifest = assemble_audio_and_manifest(
+            segments,
+            gap_ms=float(current_state.get("gap_ms", DEFAULT_SEGMENT_GAP_MS) or 0.0),
+        )
         audio_path, manifest_path = _save_outputs(output_dir, final_audio, manifest)
         review_rows = manifest["segments"]
         return (
@@ -263,6 +269,7 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
         spk2_prompt_text,
         spk2_dialect_prompt,
         seed_value,
+        gap_ms,
         state,
     ):
         state = state or {}
@@ -303,6 +310,7 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
                 "units": units,
                 "segments": segments,
                 "max_chunk_seconds": float(state.get("max_chunk_seconds", 110.0)),
+                "gap_ms": float(gap_ms if gap_ms is not None else DEFAULT_SEGMENT_GAP_MS),
             }
             full_audio, review_rows, audio_path, manifest_path, _ = _reassemble_from_state(new_state)
             return full_audio, _review_dicts_to_rows(review_rows), audio_path, manifest_path, "Generation complete.", new_state
@@ -394,6 +402,7 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
                 "units": updated_units,
                 "segments": segments,
                 "max_chunk_seconds": float(state.get("max_chunk_seconds", 110.0)),
+                "gap_ms": float(state.get("gap_ms", DEFAULT_SEGMENT_GAP_MS) or 0.0),
             }
             full_audio, review_rows, audio_path, manifest_path, _ = _reassemble_from_state(new_state)
 
@@ -405,11 +414,18 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
     with gr.Blocks(title="SoulX-Podcast Colab GUI") as app:
         gr.Markdown("## SoulX-Podcast Colab GUI\nScript editing, chunked generation, review, and sentence-level correction.")
 
-        state = gr.State({"units": [], "segments": [], "max_chunk_seconds": 110.0})
+        state = gr.State({"units": [], "segments": [], "max_chunk_seconds": 110.0,
+                          "gap_ms": DEFAULT_SEGMENT_GAP_MS})
 
         with gr.Row():
             seed_input = gr.Number(label="Seed", value=seed, precision=0)
             max_chunk_seconds = gr.Number(label="Max chunk seconds", value=110.0, precision=1)
+            gap_ms_input = gr.Number(
+                label="Pause between sentences (ms)",
+                value=DEFAULT_SEGMENT_GAP_MS,
+                precision=0,
+                minimum=0,
+            )
 
         with gr.Row():
             with gr.Column():
@@ -484,6 +500,7 @@ def create_app(model_path: str, llm_engine: str, fp16_flow: bool, seed: int):
                 spk2_prompt_text,
                 spk2_dialect_prompt,
                 seed_input,
+                gap_ms_input,
                 state,
             ],
             outputs=[final_audio, review_table, final_audio_file, final_manifest_file, status_box, state],

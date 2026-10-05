@@ -90,14 +90,67 @@ class SegmentedWorkflowTests(unittest.TestCase):
             {"sentence_id": 2, "chunk_id": 1, "speaker": "S2", "text": "C.", "audio": np.ones(6000, dtype=np.float32)},
         ]
 
-        _, manifest_before = assemble_audio_and_manifest(segments, sample_rate=24000)
+        _, manifest_before = assemble_audio_and_manifest(segments, sample_rate=24000, gap_ms=0)
         self.assertAlmostEqual(manifest_before["segments"][1]["start_seconds"], 1.0)
 
         updated = replace_segment_audio(segments, sentence_id=1, new_audio=np.ones(24000, dtype=np.float32))
-        _, manifest_after = assemble_audio_and_manifest(updated, sample_rate=24000)
+        _, manifest_after = assemble_audio_and_manifest(updated, sample_rate=24000, gap_ms=0)
 
         self.assertAlmostEqual(manifest_after["segments"][1]["duration_seconds"], 1.0)
         self.assertAlmostEqual(manifest_after["segments"][2]["start_seconds"], 2.0)
+
+    def test_assemble_inserts_a_pause_between_clips(self):
+        segments = [
+            {"sentence_id": 0, "chunk_id": 0, "speaker": "S1", "text": "A.", "audio": np.ones(24000, dtype=np.float32)},
+            {"sentence_id": 1, "chunk_id": 0, "speaker": "S1", "text": "B.", "audio": np.ones(12000, dtype=np.float32)},
+        ]
+
+        audio, manifest = assemble_audio_and_manifest(segments, sample_rate=24000, gap_ms=200)
+
+        gap_samples = 4800
+        self.assertEqual(audio.shape[0], 24000 + gap_samples + 12000)
+        # The pause sits between the two clips and is pure silence.
+        self.assertTrue(np.all(audio[24000:24000 + gap_samples] == 0))
+        self.assertAlmostEqual(manifest["segments"][1]["start_seconds"], 1.2, places=6)
+        # No trailing pause after the last clip.
+        self.assertAlmostEqual(manifest["total_duration_seconds"], 1.7, places=6)
+        self.assertAlmostEqual(manifest["segments"][-1]["end_seconds"], 1.7, places=6)
+
+    def test_assemble_has_no_gap_before_first_clip(self):
+        segments = [
+            {"sentence_id": 0, "chunk_id": 0, "speaker": "S1", "text": "A.", "audio": np.ones(24000, dtype=np.float32)},
+            {"sentence_id": 1, "chunk_id": 0, "speaker": "S2", "text": "B.", "audio": np.ones(24000, dtype=np.float32)},
+        ]
+
+        audio, manifest = assemble_audio_and_manifest(segments, sample_rate=24000, gap_ms=100)
+
+        self.assertAlmostEqual(manifest["segments"][0]["start_seconds"], 0.0, places=6)
+        self.assertEqual(audio.shape[0], 24000 + 2400 + 24000)
+
+    def test_assemble_default_gap_is_applied(self):
+        segments = [
+            {"sentence_id": 0, "chunk_id": 0, "speaker": "S1", "text": "A.", "audio": np.ones(24000, dtype=np.float32)},
+            {"sentence_id": 1, "chunk_id": 0, "speaker": "S1", "text": "B.", "audio": np.ones(24000, dtype=np.float32)},
+        ]
+
+        audio, _ = assemble_audio_and_manifest(segments, sample_rate=24000)
+
+        self.assertGreater(audio.shape[0], 48000)
+
+    def test_assemble_zero_gap_joins_clips_exactly(self):
+        segments = [
+            {"sentence_id": 0, "chunk_id": 0, "speaker": "S1", "text": "A.", "audio": np.ones(24000, dtype=np.float32)},
+            {"sentence_id": 1, "chunk_id": 0, "speaker": "S1", "text": "B.", "audio": np.ones(12000, dtype=np.float32)},
+        ]
+
+        audio, manifest = assemble_audio_and_manifest(segments, sample_rate=24000, gap_ms=0)
+
+        self.assertEqual(audio.shape[0], 36000)
+        self.assertAlmostEqual(manifest["segments"][1]["start_seconds"], 1.0, places=6)
+
+    def test_assemble_rejects_negative_gap(self):
+        with self.assertRaisesRegex(ValueError, "gap_ms"):
+            assemble_audio_and_manifest([], sample_rate=24000, gap_ms=-1)
 
 
 class DataframeConversionTests(unittest.TestCase):
