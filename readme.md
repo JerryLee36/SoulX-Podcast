@@ -1,10 +1,9 @@
 # cwcge-pdf2audio
 
-`cwcge-pdf2audio` is a PDF-to-speech application for producing long-form audio versions of lecture notes and academic reading material used by the General Education units of CW Chu College.
+`cwcge-pdf2audio` is a PDF-to-speech application for producing long-form audio versions of lecture notes and academic reading material used by the General Education Units of CW Chu College.
 
 The project was developed in response to requests from **Professor Kenneth Young**, under the guidance of **Professor Tan Lee** and **Paco Fung**. The application combines academic-document text extraction and cleaning with the SoulX-Podcast speech-generation model so that a user can prepare a born-digital academic PDF, review the text that will actually be spoken, and generate long-form speech using a supplied reference voice.
 
-Maintainer: **Yuzhe Li**  
 Contact: **yuzheli52@gmail.com**
 
 > This repository contains application code derived from and built on top of SoulX-Podcast. The original SoulX-Podcast model/inference code remains subject to the repository's Apache 2.0 license. See `LICENSE` and the acknowledgements below.
