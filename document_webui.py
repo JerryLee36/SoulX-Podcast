@@ -57,7 +57,7 @@ def extract_pdf(
             text = result.text
             used_backend = "GROBID"
         else:
-            # Prefer GROBID for academic structure, but make Colab testing zero-setup.
+            # Prefer GROBID for academic structure, but make remote testing zero-setup.
             try:
                 result = extract_speech_text(pdf_path, grobid_url=grobid_url, options=options)
                 text = result.text
@@ -108,7 +108,7 @@ def create_app():
                 grobid_url = gr.Textbox(
                     value="http://localhost:8070",
                     label="GROBID URL",
-                    info="Ignored by Local mode. You do not need GROBID for the Colab smoke test.",
+                    info="Ignored by Local mode. You do not need GROBID for a smoke test.",
                 )
 
         with gr.Accordion("Cleaning options", open=True):
@@ -120,11 +120,11 @@ def create_app():
 
         extract_btn = gr.Button("Extract and clean text", variant="primary")
         status = gr.Textbox(label="Status", interactive=False)
+        # Keep component arguments conservative for compatibility across Gradio versions.
         text_output = gr.Textbox(
             label="Extracted text (editable review)",
             lines=28,
             interactive=True,
-            show_copy_button=True,
         )
         txt_file = gr.File(label="Download extracted .txt")
 
@@ -148,7 +148,7 @@ def create_app():
 def parse_args():
     parser = argparse.ArgumentParser(description="Academic PDF to text Gradio GUI")
     parser.add_argument("--port", type=int, default=7860)
-    parser.add_argument("--share", action="store_true", help="Create a public Gradio link (useful on Colab)")
+    parser.add_argument("--share", action="store_true", help="Create a public Gradio link (useful for remote testing)")
     return parser.parse_args()
 
 
